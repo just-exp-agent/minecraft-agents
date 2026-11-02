@@ -9,6 +9,7 @@ import { countItems, goNear } from '../skills.js'
 import { buildCells } from '../building.js'
 import { createNavigator, waitOperation } from '../navigation.js'
 import { gatherResource } from '../gather.js'
+import { createSpatialMemory } from '../memory/spatial.js'
 import { config } from '../config.js'
 
 const WORLD = config.params.world
@@ -242,6 +243,27 @@ export const SCENARIOS = Object.freeze({
       if (r.status !== 'cancelled') return { success: false, reason: `expected cancelled, got ${r.status}` }
       if (r.drifted > 1.5) return { success: false, reason: `bot kept moving ${r.drifted} blocks after cancel` }
       return { success: true, reason: null }
+    }
+  }),
+
+  // --- Roadmap Шаг 4: spatial memory & exploration -------------------------------
+  // 8. Frontier exploration around camp: new sectors visited, resources indexed,
+  //    no endless circling over one place.
+  explore_frontier: Object.freeze({
+    id: 'explore_frontier',
+    title: 'Explore frontier sectors around camp and index resources',
+    timeoutMs: 150000,
+    setupCommands: baseSetupCommands,
+    run: async (bot, ctx) => {
+      const mem = createSpatialMemory(bot)
+      mem.noteVisit(ctx.camp.pad)
+      const result = await mem.exploreArea({ maxSteps: 3, scanRadius: 24 })
+      return { ...result, knownLogs: mem.knownResources('logs').length, stats: mem.stats() }
+    },
+    evaluate: (_bot, r) => {
+      if (r.steps < 2) return { success: false, reason: `explored only ${r.steps} new sectors (loop too short or frontier stuck)` }
+      if (r.knownLogs < 4) return { success: false, reason: `indexed only ${r.knownLogs} log records (${JSON.stringify(r.discovered)})` }
+      return { success: true, reason: `${r.steps} sectors, ${r.knownLogs} log records` }
     }
   })
 })

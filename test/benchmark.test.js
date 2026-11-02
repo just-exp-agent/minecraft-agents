@@ -121,6 +121,9 @@ test('evaluate() accepts real completions and rejects shortfalls', () => {
   assert.equal(SCENARIOS.build_platform.evaluate(nearChest, { placed: 5, remaining: 4 }, ctx).reason, '4/9 cells missing')
   assert.equal(SCENARIOS.gather_dirt.evaluate(nearChest, { status: 'success', gathered: 4, reason: null }, ctx).success, true)
   assert.match(SCENARIOS.gather_dirt.evaluate(nearChest, { status: 'partial', gathered: 2, reason: 'target_unreachable' }, ctx).reason, /2\/4 dirt/)
+  assert.equal(SCENARIOS.explore_frontier.evaluate(nearChest, { steps: 3, knownLogs: 7 }, ctx).success, true)
+  assert.match(SCENARIOS.explore_frontier.evaluate(nearChest, { steps: 1, knownLogs: 9 }, ctx).reason, /explored only 1/)
+  assert.match(SCENARIOS.explore_frontier.evaluate(nearChest, { steps: 3, knownLogs: 2 }, ctx).reason, /indexed only 2/)
 })
 
 test('logs_return run() drives the Шаг 3 gather pipeline against a fake world (smoke)', async () => {

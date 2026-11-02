@@ -37,6 +37,11 @@ gather:
   max_candidate_failures: 4 # unreachable/dead candidates tried before giving up
   mine_verify_ms: 2500      # how long to wait for the drop to reach the inventory
 
+memory:
+  stale_after_ms: 600000    # spatial records older than this are offered no more (10 min)
+  explore_steps: 4          # default frontier steps per explore_area call
+  explore_scan_radius: 24
+
 observer:
   sample_ms: 1000
   audit_every_ms: 8000

@@ -12,6 +12,7 @@ import { PLANKS, withdrawFromChest, craftPlanks, buildCells, isBuilt } from '../
 import { SECTIONS, PLANKS_PER_LOG, hutProgress, describeProgress } from '../blueprint.js'
 import { getObservation, describeObservation } from '../perception.js'
 import { gatherResource } from '../gather.js'
+import { createSpatialMemory, sectorKeyOf } from '../memory/spatial.js'
 
 const ACTIONS = Object.freeze(['collect', 'deposit', 'build_section', 'wait_at_camp', 'give', 'follow_commander'])
 const ITEM_KINDS = Object.freeze(['logs', 'planks', 'emerald'])
@@ -68,6 +69,10 @@ export const braggedCount = n => n * 2
 
 export function createWorker ({ persona, bus, camp, blueprint, commanderName = 'Commander' }) {
   const { bot, ready } = createBody(persona.name)
+  // Per-bot spatial map (Шаг 4): visits are noted as the bot moves between sectors;
+  // recovery policies (Шаг 7) and persistence (Шаг 9) build on this later.
+  const spatial = createSpatialMemory(bot)
+  let lastSectorKey = null
   let memory = []
   let current = IDLE
   let generation = 0
@@ -294,6 +299,11 @@ What do you say and do?`
     while (running) {
       try {
         const startedAt = Date.now()
+        const here = pos()
+        if (here) {
+          const s = sectorKeyOf(here)
+          if (s !== lastSectorKey) { lastSectorKey = s; spatial.noteVisit(here) }
+        }
         if (hookWanted()) await runHook()
         else await runAction(current, generation)
         // Defense in depth against microtask starvation: an action that resolves
@@ -315,6 +325,7 @@ What do you say and do?`
     ready,
     persona,
     stats: () => stats,
+    spatial: () => spatial,
     start () { running = true; loop() },
     stop () { running = false; bot.pathfinder.setGoal(null) }
   })
