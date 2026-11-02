@@ -74,10 +74,11 @@ export function createCommander ({ goal, team, bus, camp, blueprint, board = nul
       record('error', { agent: name, where: 'order', message: `${agent} not within order range` })
       return false
     }
-    bus.say(name, text, { to: agent })
-    // Шаг 8: the order also lands on the task board as a structured task — speech stays
-    // the human layer, the board is the reliable transport (claim/heartbeat/result).
+    // Шаг 8: the order lands on the task board BEFORE it is spoken — the worker's
+    // onHear claims the task at the moment it hears the words. Speech stays the human
+    // layer, the board is the reliable transport (claim/heartbeat/result).
     if (board) board.postTask({ goal: 'order', args: { say: text }, assignedTo: agent })
+    bus.say(name, text, { to: agent })
     await new Promise(resolve => setTimeout(resolve, 2500))
     return true
   }
