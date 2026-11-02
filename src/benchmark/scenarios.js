@@ -7,6 +7,7 @@ import Vec3 from 'vec3'
 import { setupCommands } from '../gm.js'
 import { collectLogs, countItems, goNear } from '../skills.js'
 import { buildCells } from '../building.js'
+import { createNavigator, waitOperation } from '../navigation.js'
 import { config } from '../config.js'
 
 const WORLD = config.params.world
@@ -16,6 +17,8 @@ const LOGS = /_log$/
 const SETTLE_COMMAND_MS = BENCH.settle_command_ms ?? 150
 
 const vec = ([x, y, z]) => new Vec3(x, y, z)
+const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
+const round1p = n => Math.round(n * 10) / 10
 
 /** All coordinates the scenarios need, derived from params.yaml so they follow the camp. */
 export function makeContext (username = 'Bench') {
@@ -160,6 +163,76 @@ export const SCENARIOS = Object.freeze({
     evaluate: (_bot, r) => r.remaining === 0
       ? { success: true, reason: null }
       : { success: false, reason: `${r.remaining}/9 cells missing` }
+  }),
+
+  // --- Roadmap Шаг 2: navigation as a managed operation -------------------------
+  // 5. Open ground: the navigator walks to a point and the operation succeeds.
+  goto_open: Object.freeze({
+    id: 'goto_open',
+    title: 'Navigator walks to an open-ground point 28 blocks away',
+    timeoutMs: 90000,
+    setupCommands: baseSetupCommands,
+    run: async (bot, ctx) => {
+      const nav = createNavigator(bot)
+      const f = ctx.camp.fire
+      const id = nav.start({ x: f.x + 20, y: f.y, z: f.z + 20 }, { range: 2, timeoutMs: 60000 })
+      return waitOperation(nav, id, { timeoutMs: 75000 })
+    },
+    evaluate: (_bot, snap) => snap.status === 'success'
+      ? { success: true, reason: null }
+      : { success: false, reason: `navigation ${snap.status}: ${snap.error || 'no error given'}` }
+  }),
+
+  // 6. The only target is inside the sealed box: diagnosable failure, bounded time.
+  goto_unreachable: Object.freeze({
+    id: 'goto_unreachable',
+    title: 'Navigator fails diagnosably on an unreachable target (sealed box)',
+    timeoutMs: 90000,
+    setupCommands: ctx => [...baseSetupCommands(ctx), ...boxCommands(ctx)],
+    run: async (bot, ctx) => {
+      const nav = createNavigator(bot)
+      const id = nav.start({ x: ctx.box.x, y: ctx.box.y, z: ctx.box.z }, { range: 1, timeoutMs: 45000 })
+      return waitOperation(nav, id, { timeoutMs: 60000 })
+    },
+    evaluate: (_bot, snap) => {
+      if (snap.status === 'success') return { success: false, reason: 'sealed target reported as reached — the setup leaked' }
+      if (snap.status === 'partial') {
+        // Honest "I got near but not there": correct for a sealed target, but only if
+        // it really stopped outside any plausible approach distance.
+        return snap.distance > 2.5
+          ? { success: true, reason: `honest partial: stopped ${snap.distance} blocks from the sealed target` }
+          : { success: false, reason: `partial too close (${snap.distance}) — the box is not actually sealed` }
+      }
+      if (snap.status === 'failed' && /no path|stuck/.test(snap.error || '') && snap.elapsedMs < 45000) {
+        return { success: true, reason: null }
+      }
+      return { success: false, reason: `navigation ${snap.status}: ${snap.error || 'no error given'}` }
+    }
+  }),
+
+  // 7. Cancel mid-walk: the operation reports cancelled and the bot actually stops.
+  goto_cancel: Object.freeze({
+    id: 'goto_cancel',
+    title: 'Cancelling a long walk stops the bot',
+    timeoutMs: 90000,
+    setupCommands: baseSetupCommands,
+    run: async (bot, ctx) => {
+      const nav = createNavigator(bot)
+      const f = ctx.camp.fire
+      const id = nav.start({ x: f.x + 40, y: f.y, z: f.z + 40 }, { range: 2, timeoutMs: 60000 })
+      await sleep(2500)
+      const before = nav.status(id)
+      nav.cancel(id)
+      const frozen = { x: bot.entity.position.x, y: bot.entity.position.y, z: bot.entity.position.z }
+      await sleep(1200)
+      const drifted = round1p(bot.entity.position.distanceTo(new Vec3(frozen.x, frozen.y, frozen.z)))
+      return { status: nav.status(id).status, walkedTo: before.distance, drifted }
+    },
+    evaluate: (_bot, r) => {
+      if (r.status !== 'cancelled') return { success: false, reason: `expected cancelled, got ${r.status}` }
+      if (r.drifted > 1.5) return { success: false, reason: `bot kept moving ${r.drifted} blocks after cancel` }
+      return { success: true, reason: null }
+    }
   })
 })
 

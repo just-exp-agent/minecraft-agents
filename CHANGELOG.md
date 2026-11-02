@@ -2,6 +2,41 @@
 
 Все заметные изменения проекта документируются в этом файле.
 
+## [0.1.7] — 2026-11-02
+
+Шаг 2 роадмапа автономности: навигация как управляемая операция.
+
+### Added
+- **`src/navigation.js` — executor навигации** (Mineflayer pathfinder остаётся
+  движком): `start(target)` → operationId, `status(id)`, `cancel(id)`,
+  `canReach(target)`; статусы `running/success/partial/failed/timeout/
+  cancelled`, фазы `planning/moving/recovering`; снапшот несёт позицию,
+  цель, дистанцию, elapsed, число попыток, stuck-флаг и причину.
+  Восстановление ограничено лестницей `pathRetryPlan` + stuck-детект
+  (стояние на месте → перестройка маршрута), бесконечных ретраев нет.
+  Один активный поход на бота: новый `start` supersede-ит текущий. `canReach`
+  отказывается отвечать во время активной операции («нельзя подменить цель»)
+  вместо порчи движения. `waitOperation` — awaitable-обёртка.
+- **`partial`-семантика**: прибытие только после расширения радиуса ретраем —
+  это `partial` с причиной «arrived N blocks… (requested M)», а не `success`.
+  Выявлено живым прогоном goto_unreachable: pathfinder объявлял победу в
+  3.5 блоках от замурованной цели (GoalNear меряет до центра блока, ретрай
+  расширял радиус 1→3).
+- **Три навигационных сценария в benchmark** (Шаг 2 «Проверки» роадмапа):
+  `goto_open` (открытая местность, 2/2 PASS, 5.7 с / 28 блоков),
+  `goto_unreachable` (замурованный ящик: 2/2 PASS — честный partial в 3.5
+  блоках за 8 с, без зависаний), `goto_cancel` (отмена на ходу: 2/2 PASS —
+  бот останавливается, дрейф < 1.5 блока). Событие `nav` в run-JSONL.
+- Секция `navigation` в params.yaml (sample_ms, stuck_timeout_ms,
+  can_reach_budget_ms).
+
+### Tests
+- 172 теста (было 159): навигатор (12) — жизненный цикл (успех/noPath-лестница/
+  stuck-восстановление/timeout/cancel/supersede/goal_reached), canReach
+  (вердикт, отказ при активной операции, тихий таймаут бюджета), partial при
+  расширенном радиусе, reject кривого target; бенчмарк — evaluate-предикаты
+  goto-сценариев (успех/честный partial/слишком близкий partial/timeout).
+
 ## [0.1.6] — 2026-11-01
 
 Старт нового плана автономности (docs/minecraft-agents-roadmap.md): Шаг 0

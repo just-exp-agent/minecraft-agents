@@ -27,6 +27,11 @@ path:
   go_near_retries: 2
   retry_settle_ms: 600
 
+navigation:
+  sample_ms: 250          # operation status poll + stuck sampling
+  stuck_timeout_ms: 4000  # standing still while "moving" this long triggers a recovery attempt
+  can_reach_budget_ms: 6000  # max wait for the first pathfinder verdict in canReach
+
 observer:
   sample_ms: 1000
   audit_every_ms: 8000

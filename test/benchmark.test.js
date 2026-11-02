@@ -145,6 +145,30 @@ test('commandDelayMs comes from params (benchmark.settle_command_ms)', () => {
   assert.ok(Number.isFinite(commandDelayMs) && commandDelayMs >= 0 && commandDelayMs < 5000)
 })
 
+test('goto scenarios evaluate navigator outcomes', () => {
+  const ctx = makeContext('Bench')
+  const boxLog = { name: 'oak_log', position: { x: ctx.box.x, y: ctx.box.y, z: ctx.box.z } }
+  const bot = { entity: { position: new Vec3(0, 71, 0) }, findBlocks: () => [boxLog] }
+  const ok = { status: 'success', error: null, elapsedMs: 21000 }
+  const noPath = { status: 'failed', error: 'pathfinder: no path to the target', elapsedMs: 8000 }
+  const slow = { status: 'timeout', error: 'not within 1 blocks of the target in 45000 ms', elapsedMs: 45000 }
+  const honestPartial = { status: 'partial', error: 'arrived 3.5 blocks from the target (requested 1)', distance: 3.5, elapsedMs: 8000 }
+  const tooClosePartial = { status: 'partial', error: 'arrived 2 blocks from the target (requested 1)', distance: 2, elapsedMs: 8000 }
+  assert.equal(SCENARIOS.goto_open.evaluate(bot, ok, ctx).success, true)
+  assert.match(SCENARIOS.goto_open.evaluate(bot, noPath, ctx).reason, /navigation failed/)
+
+  assert.equal(SCENARIOS.goto_unreachable.evaluate(bot, noPath, ctx).success, true, 'diagnosable bounded failure is the point')
+  assert.equal(SCENARIOS.goto_unreachable.evaluate(bot, honestPartial, ctx).success, true, 'honest partial at a distance is a valid outcome')
+  assert.equal(SCENARIOS.goto_unreachable.evaluate(bot, tooClosePartial, ctx).success, false, 'partial near a sealed box means it is not sealed')
+  assert.equal(SCENARIOS.goto_unreachable.evaluate(bot, ok, ctx).success, false, 'reaching a sealed target means the setup leaked')
+  assert.equal(SCENARIOS.goto_unreachable.evaluate(bot, slow, ctx).success, false, 'timeout is not a bounded diagnosable failure')
+  assert.match(SCENARIOS.goto_unreachable.evaluate(bot, { status: 'failed', error: '???', elapsedMs: 1000 }, ctx).reason, /navigation failed/)
+
+  assert.equal(SCENARIOS.goto_cancel.evaluate(bot, { status: 'cancelled', walkedTo: 8, drifted: 0.3 }, ctx).success, true)
+  assert.match(SCENARIOS.goto_cancel.evaluate(bot, { status: 'cancelled', walkedTo: 8, drifted: 4 }, ctx).reason, /kept moving/)
+  assert.equal(SCENARIOS.goto_cancel.evaluate(bot, { status: 'running', walkedTo: 8, drifted: 0 }, ctx).success, false)
+})
+
 test('baseSetupCommands reuses the demo world reset and teleports the bot to the pad', () => {
   const ctx = makeContext('Bench')
   const cmds = baseSetupCommands(ctx)
