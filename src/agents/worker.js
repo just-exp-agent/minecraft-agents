@@ -11,7 +11,7 @@ import { resolvePattern, depositShare } from '../items.js'
 import { PLANKS, withdrawFromChest, craftPlanks, buildCells, isBuilt } from '../building.js'
 import { SECTIONS, PLANKS_PER_LOG, hutProgress, describeProgress } from '../blueprint.js'
 import { getObservation, describeObservation } from '../perception.js'
-import { gatherResource } from '../gather.js'
+import { registry } from '../registry.js'
 import { createSpatialMemory, sectorKeyOf } from '../memory/spatial.js'
 
 const ACTIONS = Object.freeze(['collect', 'deposit', 'build_section', 'wait_at_camp', 'give', 'follow_commander'])
@@ -197,19 +197,22 @@ What do you say and do?`
     switch (action.type) {
       case 'collect': {
         const asked = action.n || 6
-        // Lazy workers quietly bring in only ~60% of the order.
-        const res = await gatherResource(bot, 'logs', persona.trait === 'lazy' ? lazyQuota(asked) : asked, {
-          shouldStop: stale,
+        // The gather goes through the skill registry (Шаг 5): one contract, normalized
+        // result with taxonomy reason + recovery hints. Lazy workers quietly bring in
+        // only ~60% of the order.
+        const res = await registry.invoke(bot, 'gather_resource', {
+          type: 'logs',
+          amount: persona.trait === 'lazy' ? lazyQuota(asked) : asked,
           anchor: directionAnchor(camp.fire, action.direction)
-        })
-        const got = res.gathered
+        }, { camp })
+        const got = res.status === 'success' ? (res.completed || 0) : Math.max(0, res.completed || 0)
         stats = Object.freeze({ ...stats, collected: stats.collected + got })
         if (stale()) return
         if (got === 0) {
           current = IDLE
           await sleep(4000)
-          // The prefix is parsed by the stub; the reason is new (Шаг 7 taxonomy groundwork).
-          await deliberate(`You could not find any reachable logs${action.direction !== 'any' ? ` to the ${action.direction}` : ''} — ${res.reason}. Try another direction or report back.`)
+          // The prefix is parsed by the stub; the reason + hints are new (Шаг 5/7).
+          await deliberate(`You could not find any reachable logs${action.direction !== 'any' ? ` to the ${action.direction}` : ''} — ${res.reason}. Consider: ${res.recoveryHints.join(', ')}.`)
           return
         }
         // No auto-delivery: depositing is the LLM's decision now.
