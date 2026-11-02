@@ -32,6 +32,11 @@ navigation:
   stuck_timeout_ms: 4000  # standing still while "moving" this long triggers a recovery attempt
   can_reach_budget_ms: 6000  # max wait for the first pathfinder verdict in canReach
 
+gather:
+  nav_range: 2              # how close navigate_to must get before mining
+  max_candidate_failures: 4 # unreachable/dead candidates tried before giving up
+  mine_verify_ms: 2500      # how long to wait for the drop to reach the inventory
+
 observer:
   sample_ms: 1000
   audit_every_ms: 8000

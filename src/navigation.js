@@ -19,7 +19,10 @@ const NAV = config.params.navigation || {}
 const SAMPLE_MS = NAV.sample_ms ?? 250          // status poll + stuck sampling
 const STUCK_TIMEOUT_MS = NAV.stuck_timeout_ms ?? 4000
 const STUCK_DISTANCE = 0.8                      // less movement per sample than this = standing
-const REACH_EPS = 1.2                           // goal_reached can lag; this close counts as arrived
+// The poll check must stay STRICT: goal_reached is the authoritative arrival signal.
+// A generous epsilon here let the poll declare victory while the bot still stood at a
+// wall 3 blocks from a sealed target (goal then widened on retry → fake success).
+const REACH_EPS = 0.5
 
 const round1 = n => Math.round(n * 10) / 10
 const dist3 = (a, b) => Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z)
@@ -207,6 +210,14 @@ export function createNavigator (bot, {
     active: () => (current && !current.done ? snapshot(current) : null),
     all: () => Object.freeze([...ops.values()].filter(op => !op.done || Date.now() - op.startedAt < 60000).map(snapshot))
   })
+}
+
+// One navigator per bot: repeated navigateTo() calls must not stack pathfinder
+// listeners or fight over goals. gather.js and future skills go through this.
+const navigators = new WeakMap()
+export function navigatorFor (bot) {
+  if (!navigators.has(bot)) navigators.set(bot, createNavigator(bot))
+  return navigators.get(bot)
 }
 
 /** Await an operation's terminal state (polls status); resolves with the final snapshot. */

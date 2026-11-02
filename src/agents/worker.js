@@ -4,13 +4,14 @@ import { record } from '../events.js'
 import { config } from '../config.js'
 import { guardSpeech } from '../guard.js'
 import {
-  createBody, collectLogs, depositToChest, goNear, approachPlayer, giveToPlayer,
+  createBody, depositToChest, goNear, approachPlayer, giveToPlayer,
   countItems, nearestEntity, followEntity, isDark, withTimeout, directionAnchor, DIRECTIONS, lastPathError
 } from '../skills.js'
 import { resolvePattern, depositShare } from '../items.js'
 import { PLANKS, withdrawFromChest, craftPlanks, buildCells, isBuilt } from '../building.js'
 import { SECTIONS, PLANKS_PER_LOG, hutProgress, describeProgress } from '../blueprint.js'
 import { getObservation, describeObservation } from '../perception.js'
+import { gatherResource } from '../gather.js'
 
 const ACTIONS = Object.freeze(['collect', 'deposit', 'build_section', 'wait_at_camp', 'give', 'follow_commander'])
 const ITEM_KINDS = Object.freeze(['logs', 'planks', 'emerald'])
@@ -192,16 +193,18 @@ What do you say and do?`
       case 'collect': {
         const asked = action.n || 6
         // Lazy workers quietly bring in only ~60% of the order.
-        const got = await collectLogs(bot, persona.trait === 'lazy' ? lazyQuota(asked) : asked, {
+        const res = await gatherResource(bot, 'logs', persona.trait === 'lazy' ? lazyQuota(asked) : asked, {
           shouldStop: stale,
           anchor: directionAnchor(camp.fire, action.direction)
         })
+        const got = res.gathered
         stats = Object.freeze({ ...stats, collected: stats.collected + got })
         if (stale()) return
         if (got === 0) {
           current = IDLE
           await sleep(4000)
-          await deliberate(`You could not find any reachable logs${action.direction !== 'any' ? ` to the ${action.direction}` : ''}. Try another direction or report back.`)
+          // The prefix is parsed by the stub; the reason is new (Шаг 7 taxonomy groundwork).
+          await deliberate(`You could not find any reachable logs${action.direction !== 'any' ? ` to the ${action.direction}` : ''} — ${res.reason}. Try another direction or report back.`)
           return
         }
         // No auto-delivery: depositing is the LLM's decision now.

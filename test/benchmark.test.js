@@ -1,5 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { EventEmitter } from 'node:events'
 import Vec3 from 'vec3'
 import { pathLength, stuckMs, createTracker } from '../src/benchmark/tracker.js'
 import { SCENARIOS, makeContext, baseSetupCommands, commandDelayMs } from '../src/benchmark/scenarios.js'
@@ -101,41 +102,59 @@ test('evaluate() accepts real completions and rejects shortfalls', () => {
     findBlocks: atBox
   }
   const brokenSetup = { entity: nearChest.entity, findBlocks: () => [] }
-  assert.equal(SCENARIOS.logs_return.evaluate(nearChest, { got: 8, returned: true }, ctx).success, true)
-  assert.equal(SCENARIOS.logs_return.evaluate(nearChest, { got: 5, returned: true }, ctx).reason, 'collected 5/8 logs')
-  assert.equal(SCENARIOS.logs_return.evaluate(farAway, { got: 8, returned: false }, ctx).success, false)
-  assert.equal(SCENARIOS.logs_obstacle.evaluate(nearChest, { got: 8 }, ctx).success, true)
-  assert.equal(SCENARIOS.logs_obstacle.evaluate(nearChest, { got: 2 }, ctx).success, false)
-  assert.equal(SCENARIOS.logs_sealed.evaluate(nearChest, { got: 0, detected: true }, ctx).success, true, 'detected unreachable = success')
-  assert.equal(SCENARIOS.logs_sealed.evaluate(nearChest, { got: 9, detected: false }, ctx).success, false, 'mining through a sealed box means the setup failed')
-  assert.match(SCENARIOS.logs_sealed.evaluate(brokenSetup, { got: 0, detected: true }, ctx).reason, /setup broken/, 'empty box must not fake a pass')
+  const okGather = { gather: { gathered: 8, reason: null }, returned: true }
+  const shortGather = { gather: { gathered: 5, reason: 'candidates_exhausted' }, returned: true }
+  const notBack = { gather: { gathered: 8, reason: null }, returned: false }
+  const obstacleOk = { gather: { gathered: 8, reason: null } }
+  const obstacleShort = { gather: { gathered: 2, reason: 'target_unreachable' } }
+  const sealedFailed = { status: 'failed', gathered: 0, reason: 'target_unreachable', elapsedMs: 14000 }
+  const sealedMined = { status: 'failed', gathered: 9, reason: 'candidates_exhausted', elapsedMs: 60000 }
+  assert.equal(SCENARIOS.logs_return.evaluate(nearChest, okGather, ctx).success, true)
+  assert.equal(SCENARIOS.logs_return.evaluate(nearChest, shortGather, ctx).reason, 'collected 5/8 logs (candidates_exhausted)')
+  assert.equal(SCENARIOS.logs_return.evaluate(farAway, notBack, ctx).success, false)
+  assert.equal(SCENARIOS.logs_obstacle.evaluate(nearChest, obstacleOk, ctx).success, true)
+  assert.match(SCENARIOS.logs_obstacle.evaluate(nearChest, obstacleShort, ctx).reason, /2\/8/)
+  assert.equal(SCENARIOS.logs_sealed.evaluate(nearChest, sealedFailed, ctx).success, true, 'bounded diagnosable failure is the point')
+  assert.equal(SCENARIOS.logs_sealed.evaluate(nearChest, sealedMined, ctx).success, false, 'mining a sealed box means the setup failed')
+  assert.match(SCENARIOS.logs_sealed.evaluate(brokenSetup, sealedFailed, ctx).reason, /setup broken/, 'empty box must not fake a pass')
   assert.equal(SCENARIOS.build_platform.evaluate(nearChest, { placed: 9, remaining: 0 }, ctx).success, true)
   assert.equal(SCENARIOS.build_platform.evaluate(nearChest, { placed: 5, remaining: 4 }, ctx).reason, '4/9 cells missing')
+  assert.equal(SCENARIOS.gather_dirt.evaluate(nearChest, { status: 'success', gathered: 4, reason: null }, ctx).success, true)
+  assert.match(SCENARIOS.gather_dirt.evaluate(nearChest, { status: 'partial', gathered: 2, reason: 'target_unreachable' }, ctx).reason, /2\/4 dirt/)
 })
 
-test('logs_return run() drives the skill layer against a fake world (smoke)', async () => {
-  // Fake bot: two collectable logs near the start, chest within walking "distance".
+test('logs_return run() drives the Шаг 3 gather pipeline against a fake world (smoke)', async () => {
+  // Fake bot: two minable logs near the start, instant pathfinder, dig fills the inventory.
   const carried = []
   const logSpots = [new Vec3(3, 71, 0), new Vec3(-4, 71, 1)]
-  const bot = {
-    username: 'Bench',
-    entity: { position: new Vec3(0, 71, 0) },
-    inventory: { items: () => carried },
-    findBlocks: () => logSpots.map(p => p.clone()),
-    blockAt: p => ({ name: 'oak_log', position: p.clone() }),
-    collectBlock: {
-      collect: async block => {
-        logSpots.splice(logSpots.findIndex(s => s.equals(block.position)), 1)
-        carried.push({ name: 'oak_log', count: 1 })
-      },
-      cancelTask: async () => {}
-    },
-    pathfinder: { setGoal: () => {}, goto: async () => { bot.entity.position = new Vec3(0, 71, 1) } }
+  const bot = new EventEmitter()
+  bot.username = 'Bench'
+  bot.entity = { position: new Vec3(0, 71, 0) }
+  bot.inventory = { items: () => carried, slots: [] }
+  bot.findBlocks = ({ matching, count }) => logSpots
+    .map(p => ({ name: 'oak_log', position: p.clone() }))
+    .filter(matching)
+    .slice(0, count)
+    .map(b => b.position)
+  bot.blockAt = p => logSpots.some(s => s.equals(p))
+    ? { name: 'oak_log', boundingBox: 'block', position: p.clone() }
+    : { name: 'air', boundingBox: 'empty', position: p.clone() }
+  bot.dig = async block => {
+    logSpots.splice(logSpots.findIndex(s => s.equals(block.position)), 1)
+    carried.push({ name: 'oak_log', count: 1 })
   }
+  bot.pathfinder = {
+    setGoal: g => { if (g) bot.entity.position = new Vec3(g.x, 71, g.z) },
+    goto: async () => {}
+  }
+  bot.lookAt = async () => {}
   const ctx = makeContext('Bench')
   const result = await SCENARIOS.logs_return.run(bot, ctx)
-  assert.deepEqual({ got: result.got, returned: result.returned }, { got: 2, returned: true })
-  // Full evaluate on the same double: 2 logs is a documented shortfall, not a crash.
+  assert.deepEqual(
+    { gathered: result.gather.gathered, status: result.gather.status, returned: result.returned },
+    { gathered: 2, status: 'partial', returned: true },
+    '2 of 8 is an honest partial, and the pipeline says so'
+  )
   const verdict = SCENARIOS.logs_return.evaluate(bot, result, ctx)
   assert.equal(verdict.success, false)
   assert.match(verdict.reason, /2\/8/)

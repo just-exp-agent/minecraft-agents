@@ -5,9 +5,10 @@
 // the same primitives the LLM worker gets, executed end-to-end.
 import Vec3 from 'vec3'
 import { setupCommands } from '../gm.js'
-import { collectLogs, countItems, goNear } from '../skills.js'
+import { countItems, goNear } from '../skills.js'
 import { buildCells } from '../building.js'
 import { createNavigator, waitOperation } from '../navigation.js'
+import { gatherResource } from '../gather.js'
 import { config } from '../config.js'
 
 const WORLD = config.params.world
@@ -86,19 +87,20 @@ const platformCommands = ctx => [
 ]
 
 export const SCENARIOS = Object.freeze({
-  // 1. Find a tree, collect 8 logs, walk back to the camp chest.
+  // 1. Find a tree, collect 8 logs, walk back to the camp chest. Runs on the Шаг 3
+  //    gather primitives (find → navigate → mine), not the legacy collectLogs.
   logs_return: Object.freeze({
     id: 'logs_return',
-    title: 'Collect 8 logs and return to the camp chest',
+    title: 'Gather 8 logs and return to the camp chest',
     timeoutMs: BENCH.scenario_timeout_ms ?? 180000,
     setupCommands: baseSetupCommands,
     run: async (bot, ctx) => {
-      const got = await collectLogs(bot, 8, {})
+      const gather = await gatherResource(bot, 'logs', 8, {})
       const returned = await goNear(bot, ctx.camp.chest, 3)
-      return { got, returned }
+      return { gather, returned }
     },
     evaluate: (bot, r, ctx) => {
-      if (r.got < 8) return { success: false, reason: `collected ${r.got}/8 logs` }
+      if (r.gather.gathered < 8) return { success: false, reason: `collected ${r.gather.gathered}/8 logs (${r.gather.reason})` }
       if (!r.returned) return { success: false, reason: 'did not return to the chest' }
       const d = bot.entity.position.distanceTo(ctx.camp.chest)
       if (d > 4.5) return { success: false, reason: `ended ${d.toFixed(1)}m from the chest` }
@@ -109,31 +111,27 @@ export const SCENARIOS = Object.freeze({
   // 2. The north grove is behind an unbreakable wall — the path must go around it.
   logs_obstacle: Object.freeze({
     id: 'logs_obstacle',
-    title: 'Collect 8 logs anchored behind a wall (route around required)',
+    title: 'Gather 8 logs anchored behind a wall (route around required)',
     timeoutMs: BENCH.scenario_timeout_ms ?? 180000,
     setupCommands: ctx => [...baseSetupCommands(ctx), ...wallCommands(ctx)],
     run: async (bot, ctx) => {
-      const got = await collectLogs(bot, 8, { anchor: new Vec3(ctx.northAnchor.x, ctx.northAnchor.y, ctx.northAnchor.z) })
-      return { got }
+      const gather = await gatherResource(bot, 'logs', 8, { anchor: { x: ctx.northAnchor.x, y: ctx.northAnchor.y, z: ctx.northAnchor.z } })
+      return { gather }
     },
-    evaluate: (_bot, r) => r.got >= 8
+    evaluate: (_bot, r) => r.gather.gathered >= 8
       ? { success: true, reason: null }
-      : { success: false, reason: `collected ${r.got}/8 logs behind the wall` }
+      : { success: false, reason: `collected ${r.gather.gathered}/8 logs behind the wall (${r.gather.reason})` }
   }),
 
   // 3. Every log in the search radius is swept away except nine sealed inside an
-  //    unbreakable box: the targets are visible but unreachable. Success means the body
-  //    detects the failure and terminates fast — it must not hang or wander for logs.
+  //    unbreakable box: the targets are visible but unreachable. Success means the
+  //    gather pipeline reports a bounded, diagnosable failure — no hang, no fake win.
   logs_sealed: Object.freeze({
     id: 'logs_sealed',
     title: 'Detect unreachable logs (only sealed ones remain) and fail fast',
     timeoutMs: BENCH.sealed_timeout_ms ?? 150000,
     setupCommands: ctx => [...baseSetupCommands(ctx), ...clearLogSlices(ctx), ...boxCommands(ctx)],
-    run: async (bot, ctx) => {
-      const t0 = Date.now()
-      const got = await collectLogs(bot, 8, {})
-      return { got, detected: got === 0, elapsedMs: Date.now() - t0 }
-    },
+    run: async (bot, ctx) => gatherResource(bot, 'logs', 8, {}),
     evaluate: (bot, r, ctx) => {
       // The palette gate passes name-only stubs (position null) — let them through the
       // matcher and filter positions on the results, or whole sections get skipped.
@@ -144,10 +142,22 @@ export const SCENARIOS = Object.freeze({
         count: 16
       }) || []).filter(inBox)
       if (boxLogs.length === 0) return { success: false, reason: 'setup broken: no logs in the sealed box region' }
-      return r.detected
-        ? { success: true, reason: null }
-        : { success: false, reason: `collected ${r.got} logs from a sealed box (should be unreachable)` }
+      if (r.gathered > 0) return { success: false, reason: `mined ${r.gathered} logs out of a sealed box` }
+      if (r.status === 'failed' && r.elapsedMs < (BENCH.sealed_timeout_ms ?? 150000)) return { success: true, reason: `bounded failure: ${r.reason}` }
+      return { success: false, reason: `gather ended ${r.status} (${r.reason}) in ${r.elapsedMs} ms` }
     }
+  }),
+
+  // 3b. The same gather pipeline on a DIFFERENT resource type — no log special-casing.
+  gather_dirt: Object.freeze({
+    id: 'gather_dirt',
+    title: 'Gather 4 dirt (a non-log resource through the same pipeline)',
+    timeoutMs: 120000,
+    setupCommands: baseSetupCommands,
+    run: async (bot, ctx) => gatherResource(bot, 'dirt', 4, {}),
+    evaluate: (_bot, r) => r.gathered >= 4
+      ? { success: true, reason: null }
+      : { success: false, reason: `gathered ${r.gathered}/4 dirt (${r.reason})` }
   }),
 
   // 4. Build a 3x3 plank platform from explicit coordinates.
