@@ -54,7 +54,7 @@ export const validateReview = team => d => {
   return Object.freeze({ thought: String(d.thought || ''), beliefs: Object.freeze(beliefs), decisions, watch: team.includes(d.watch) ? d.watch : null })
 }
 
-export function createCommander ({ goal, team, bus, camp, blueprint }) {
+export function createCommander ({ goal, team, bus, camp, blueprint, board = null }) {
   const { bot, ready } = createBody('Commander')
   const name = 'Commander'
   let heard = []
@@ -75,6 +75,9 @@ export function createCommander ({ goal, team, bus, camp, blueprint }) {
       return false
     }
     bus.say(name, text, { to: agent })
+    // Шаг 8: the order also lands on the task board as a structured task — speech stays
+    // the human layer, the board is the reliable transport (claim/heartbeat/result).
+    if (board) board.postTask({ goal: 'order', args: { say: text }, assignedTo: agent })
     await new Promise(resolve => setTimeout(resolve, 2500))
     return true
   }
@@ -164,6 +167,7 @@ Reply ONLY JSON: {"thought": "...", "beliefs": {"Name": {"guess": "...", "confid
         }
         nextReview = Date.now() + REVIEW_EVERY_MS
       }
+      if (board) board.requeueExpired()
       const target = rotation[watchIndex % rotation.length]
       record('status', { agent: name, watching: target })
       watch(target)

@@ -13,6 +13,7 @@ import { setupWorld, sunset, revealTruth, mirrorToGameChat, announce } from './g
 import { manageSpectators, waitForStart } from './startGate.js'
 import { startDashboard } from './dashboard/server.js'
 import { startHeapWatch } from './heap-watch.js'
+import { createTaskBoard } from './coordination/task-board.js'
 
 const GOAL = 'Build a small wooden hut next to camp before night: gather logs into the camp chest, then have the team craft planks and build the walls and roof.'
 const campAt = (x, y, z) => new Vec3(x, y, z)
@@ -46,14 +47,17 @@ async function main () {
     }
   })
   const dashboard = startDashboard({ team: ROSTER.map(p => p.name), goal: GOAL })
+  // Шаг 8: one shared task board — commander posts structured tasks, workers claim,
+  // heartbeat and report results. Speech stays the persona layer.
+  const board = createTaskBoard()
 
   const blueprint = createHutBlueprint(CAMP.hut)
   const workers = []
   for (const persona of ROSTER) {
-    workers.push(createWorker({ persona, bus, camp: CAMP, blueprint }))
+    workers.push(createWorker({ persona, bus, camp: CAMP, blueprint, board }))
     await sleep(1200)
   }
-  const commander = createCommander({ goal: GOAL, team: ROSTER.map(p => p.name), bus, camp: CAMP, blueprint })
+  const commander = createCommander({ goal: GOAL, team: ROSTER.map(p => p.name), bus, camp: CAMP, blueprint, board })
   await Promise.all([...workers.map(w => w.ready), commander.ready])
   record('gm', { text: `All bots connected. Log file: ${runInfo.logFile}` })
   // HEAP_WATCH=1: log memory + per-bot chunk-column counts every 5s; with

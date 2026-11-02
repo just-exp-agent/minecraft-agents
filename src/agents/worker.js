@@ -67,12 +67,14 @@ const sameAction = (a, b) => a.type === b.type && a.item === b.item && a.n === b
 export const lazyQuota = n => Math.max(1, Math.ceil(n * 0.6))
 export const braggedCount = n => n * 2
 
-export function createWorker ({ persona, bus, camp, blueprint, commanderName = 'Commander' }) {
+export function createWorker ({ persona, bus, camp, blueprint, commanderName = 'Commander', board = null }) {
   const { bot, ready } = createBody(persona.name)
   // Per-bot spatial map (Шаг 4): visits are noted as the bot moves between sectors;
   // recovery policies (Шаг 7) and persistence (Шаг 9) build on this later.
   const spatial = createSpatialMemory(bot)
   let lastSectorKey = null
+  let activeTaskId = null
+  let lastHeartbeatAt = 0
   let memory = []
   let current = IDLE
   let generation = 0
@@ -93,7 +95,17 @@ export function createWorker ({ persona, bus, camp, blueprint, commanderName = '
     onHear: msg => {
       remember(`${msg.speaker} said${msg.to ? ` to ${msg.to}` : ''}: "${msg.text}"`)
       const addressedToMe = msg.to === persona.name || (msg.to === null && msg.speaker === commanderName)
-      if (addressedToMe) deliberate(`${msg.speaker} just spoke to you: "${msg.text}"`)
+      if (addressedToMe) {
+        deliberate(`${msg.speaker} just spoke to you: "${msg.text}"`)
+        // Шаг 8: accept the board task behind the order — an acknowledged claim, not just speech.
+        if (board) {
+          const taskId = board.pickTaskFor(persona.name)
+          if (taskId && board.claim(taskId, persona.name).ok) {
+            activeTaskId = taskId
+            remember(`(accepted task ${taskId})`)
+          }
+        }
+      }
     }
   })
 
@@ -186,6 +198,7 @@ What do you say and do?`
     })
     if (stale()) return
     current = IDLE
+    reportTask(result.remaining === 0, result.remaining === 0 ? { section: action.section } : `ran out of planks (${result.remaining} missing)`)
     if (result.remaining === 0) remember(`(done) the ${label} is complete`)
     const outOfPlanks = result.remaining > 0 && countItems(bot, PLANKS) === 0
     await deliberate(`You placed ${result.placed} blocks on the ${label}; ${result.remaining} still missing.` +
@@ -207,6 +220,7 @@ What do you say and do?`
         }, { camp })
         const got = res.status === 'success' ? (res.completed || 0) : Math.max(0, res.completed || 0)
         stats = Object.freeze({ ...stats, collected: stats.collected + got })
+        reportTask(got > 0, got > 0 ? { gathered: got } : res.reason)
         if (stale()) return
         if (got === 0) {
           current = IDLE
@@ -298,6 +312,24 @@ What do you say and do?`
     }
   }
 
+  // Шаг 8: task-board reporting — claim acknowledged on hear, progress heartbeated in
+  // the loop, the outcome reported when the collecting finishes. Speech stays the
+  // human layer; the board is the reliable transport.
+  function reportTask (ok, result) {
+    if (!board || !activeTaskId) return
+    const outcome = ok ? board.complete(activeTaskId, persona.name, result) : board.failTask(activeTaskId, persona.name, String(result))
+    if (outcome.ok) record('task', { agent: persona.name, taskId: activeTaskId, ok, result })
+    activeTaskId = null
+  }
+
+  function heartbeatTask () {
+    if (!board || !activeTaskId) return
+    if (Date.now() - lastHeartbeatAt < 15000) return
+    lastHeartbeatAt = Date.now()
+    const beat = board.heartbeat(activeTaskId, persona.name)
+    if (!beat.ok) activeTaskId = null // lease lapsed or reassigned: the board took it back
+  }
+
   async function loop () {
     while (running) {
       try {
@@ -307,6 +339,7 @@ What do you say and do?`
           const s = sectorKeyOf(here)
           if (s !== lastSectorKey) { lastSectorKey = s; spatial.noteVisit(here) }
         }
+        heartbeatTask()
         if (hookWanted()) await runHook()
         else await runAction(current, generation)
         // Defense in depth against microtask starvation: an action that resolves
