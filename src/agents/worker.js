@@ -10,9 +10,10 @@ import {
 import { resolvePattern, depositShare } from '../items.js'
 import { PLANKS, withdrawFromChest, craftPlanks, buildCells, isBuilt } from '../building.js'
 import { SECTIONS, PLANKS_PER_LOG, hutProgress, describeProgress } from '../blueprint.js'
-import { getObservation, describeObservation } from '../perception.js'
+import { getObservation, describeObservation, serializePos } from '../perception.js'
 import { registry } from '../registry.js'
 import { createSpatialMemory, sectorKeyOf } from '../memory/spatial.js'
+import { createEpisodicMemory, loadAgentMemory, saveAgentMemory } from '../memory/episodic.js'
 
 const ACTIONS = Object.freeze(['collect', 'deposit', 'build_section', 'wait_at_camp', 'give', 'follow_commander'])
 const ITEM_KINDS = Object.freeze(['logs', 'planks', 'emerald'])
@@ -72,6 +73,7 @@ export function createWorker ({ persona, bus, camp, blueprint, commanderName = '
   // Per-bot spatial map (Шаг 4): visits are noted as the bot moves between sectors;
   // recovery policies (Шаг 7) and persistence (Шаг 9) build on this later.
   const spatial = createSpatialMemory(bot)
+  const episodes = createEpisodicMemory(persona.name)
   let lastSectorKey = null
   let activeTaskId = null
   let lastHeartbeatAt = 0
@@ -89,6 +91,13 @@ export function createWorker ({ persona, bus, camp, blueprint, commanderName = '
   const pos = () => bot.entity?.position
   const timeLabel = () => (isDark(bot) ? 'night (dark)' : bot.time.timeOfDay > 11500 ? 'sunset' : 'day')
   const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
+  // Шаг 9: long-term memory survives restarts — known resource spots, past outcomes.
+  const savedMemory = loadAgentMemory(persona.name)
+  if (savedMemory) {
+    episodes.restore(savedMemory.episodes)
+    if (savedMemory.spatial) spatial.restore(savedMemory.spatial)
+    remember(`(you remember this forest from ${savedMemory.savedAt})`)
+  }
 
   bus.register(persona.name, {
     getPos: pos,
@@ -220,6 +229,11 @@ What do you say and do?`
         }, { camp })
         const got = res.status === 'success' ? (res.completed || 0) : Math.max(0, res.completed || 0)
         stats = Object.freeze({ ...stats, collected: stats.collected + got })
+        // Шаг 9: objective episode — task, skill, args, outcome, reason, place, delta.
+        episodes.add({
+          task: 'collect', skill: 'gather_resource', args: { type: 'logs', amount: asked },
+          outcome: res.status, reason: res.reason, position: serializePos(pos()), delta: got
+        })
         reportTask(got > 0, got > 0 ? { gathered: got } : res.reason)
         if (stale()) return
         if (got === 0) {
@@ -363,6 +377,11 @@ What do you say and do?`
     stats: () => stats,
     spatial: () => spatial,
     start () { running = true; loop() },
-    stop () { running = false; bot.pathfinder.setGoal(null) }
+    stop () {
+      running = false
+      bot.pathfinder.setGoal(null)
+      // Шаг 9: persist the long-term memory (episodes + spatial map) for the next session.
+      saveAgentMemory(persona.name, { episodes: episodes.serialize(), spatial: spatial.serialize() })
+    }
   })
 }
