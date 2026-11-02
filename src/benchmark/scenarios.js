@@ -61,6 +61,24 @@ const wallCommands = ctx => [
   `fill ${ctx.wall.x1} ${ctx.wall.y1} ${ctx.wall.z1} ${ctx.wall.x2} ${ctx.wall.y2} ${ctx.wall.z2} oak_planks`
 ]
 
+// Scenarios leave no trace: whatever a scenario built, its teardown air-fills
+// (1 block wider on every side), so the shared world stays clean between runs.
+const wallTeardown = ctx => [
+  `fill ${ctx.wall.x1 - 1} ${ctx.wall.y1 - 1} ${ctx.wall.z1 - 1} ${ctx.wall.x2 + 1} ${ctx.wall.y2 + 1} ${ctx.wall.z2 + 1} air`
+]
+
+const boxTeardown = ctx => {
+  const o = ctx.box
+  return [`fill ${o.x - 3} ${o.y - 2} ${o.z - 3} ${o.x + 3} ${o.y + 4} ${o.z + 3} air`]
+}
+
+const platformTeardown = ctx => {
+  const xs = ctx.platformCells.map(c => c.x)
+  const zs = ctx.platformCells.map(c => c.z)
+  const y = ctx.camp.pad.y
+  return [`fill ${Math.min(...xs) - 1} ${y} ${Math.min(...zs) - 1} ${Math.max(...xs) + 1} ${y + 2} ${Math.max(...zs) + 1} air`]
+}
+
 const boxCommands = ctx => {
   const o = ctx.box
   return [
@@ -115,6 +133,7 @@ export const SCENARIOS = Object.freeze({
     title: 'Gather 8 logs anchored behind a wall (route around required)',
     timeoutMs: BENCH.scenario_timeout_ms ?? 180000,
     setupCommands: ctx => [...baseSetupCommands(ctx), ...wallCommands(ctx)],
+    teardownCommands: wallTeardown,
     run: async (bot, ctx) => {
       const gather = await gatherResource(bot, 'logs', 8, { anchor: { x: ctx.northAnchor.x, y: ctx.northAnchor.y, z: ctx.northAnchor.z } })
       return { gather }
@@ -132,6 +151,7 @@ export const SCENARIOS = Object.freeze({
     title: 'Detect unreachable logs (only sealed ones remain) and fail fast',
     timeoutMs: BENCH.sealed_timeout_ms ?? 150000,
     setupCommands: ctx => [...baseSetupCommands(ctx), ...clearLogSlices(ctx), ...boxCommands(ctx)],
+    teardownCommands: boxTeardown,
     run: async (bot, ctx) => gatherResource(bot, 'logs', 8, {}),
     evaluate: (bot, r, ctx) => {
       // The palette gate passes name-only stubs (position null) — let them through the
@@ -155,6 +175,7 @@ export const SCENARIOS = Object.freeze({
     title: 'Gather 4 dirt (a non-log resource through the same pipeline)',
     timeoutMs: 120000,
     setupCommands: baseSetupCommands,
+    teardownCommands: ctx => [`fill ${ctx.camp.pad.x - 3} ${ctx.camp.pad.y - 2} ${ctx.camp.pad.z - 3} ${ctx.camp.pad.x + 3} ${ctx.camp.pad.y - 1} ${ctx.camp.pad.z + 3} grass_block`],
     run: async (bot, ctx) => gatherResource(bot, 'dirt', 4, {}),
     evaluate: (_bot, r) => r.gathered >= 4
       ? { success: true, reason: null }
@@ -167,6 +188,7 @@ export const SCENARIOS = Object.freeze({
     title: 'Build a 3x3 plank platform at given coordinates',
     timeoutMs: BENCH.scenario_timeout_ms ?? 180000,
     setupCommands: ctx => [...baseSetupCommands(ctx), ...platformCommands(ctx)],
+    teardownCommands: platformTeardown,
     run: async (bot, ctx) => {
       await goNear(bot, ctx.camp.pad, 3)
       return buildCells(bot, ctx.platformCells)

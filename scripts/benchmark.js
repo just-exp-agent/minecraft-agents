@@ -61,6 +61,11 @@ async function runScenario (sc, run, ctx) {
     tracker.stop()
     const move = tracker.snapshot()
     const verdict = timedOut ? { success: false, reason: 'timeout' } : sc.evaluate(bot, result, ctx)
+    // Leave no trace in the shared world: air-fill whatever the scenario built.
+    for (const cmd of (sc.teardownCommands?.(ctx) || [])) {
+      consoleCommand(cmd)
+      await sleep(commandDelayMs)
+    }
     const p = bot.entity.position
     return {
       scenario: sc.id,

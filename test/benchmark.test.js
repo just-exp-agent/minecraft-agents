@@ -87,6 +87,16 @@ test('scenario setup commands are plausible console commands with the scenario-s
     box.indexOf(box.find(c => c.endsWith(' oak_log'))), 'the sweep runs before the box is placed')
   const platform = SCENARIOS.build_platform.setupCommands(ctx)
   assert.ok(platform.includes('give Bench oak_planks 64'), 'platform scenario supplies planks')
+  // Leave-no-trace: every scenario that builds something must air-fill it afterwards.
+  const wallTear = SCENARIOS.logs_obstacle.teardownCommands(ctx)
+  assert.ok(wallTear.some(c => c.startsWith(`fill ${ctx.wall.x1 - 1} ${ctx.wall.y1 - 1} ${ctx.wall.z1 - 1}`) && c.endsWith(' air')), 'wall is air-filled, one block wider')
+  const boxTear = SCENARIOS.logs_sealed.teardownCommands(ctx)
+  assert.ok(boxTear.some(c => c.startsWith(`fill ${ctx.box.x - 3} ${ctx.box.y - 2} ${ctx.box.z - 3}`) && c.endsWith(' air')), 'sealed box is air-filled')
+  assert.ok(SCENARIOS.build_platform.teardownCommands(ctx).some(c => c.endsWith(' air')), 'platform is air-filled')
+  assert.ok(SCENARIOS.gather_dirt.teardownCommands(ctx).some(c => c.includes(' grass_block')), 'dug surface is re-grassed')
+  for (const id of ['logs_return', 'goto_open', 'goto_cancel', 'explore_frontier']) {
+    assert.equal((SCENARIOS[id].teardownCommands?.(ctx) || []).length, 0, `${id} leaves nothing to tear down`)
+  }
 })
 
 test('evaluate() accepts real completions and rejects shortfalls', () => {
